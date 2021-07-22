@@ -2,8 +2,7 @@ import * as core from '@actions/core'
 import * as github from '@actions/github'
 import * as exec from '@actions/exec'
 
-import * as Webhooks from '@octokit/webhooks'
-import {OctokitResponse, PullsGetResponseData} from '@octokit/types'
+import {IssueCommentEvent} from '@octokit/webhooks-types'
 
 import * as prettier from 'prettier'
 
@@ -17,36 +16,37 @@ async function run(): Promise<void> {
     const gitUserEmail = core.getInput('git-user.email', {required: true})
 
     if (github.context.eventName === 'issue_comment') {
-      const payload = github.context
-        .payload as Webhooks.EventPayloads.WebhookPayloadIssueComment
+      const payload = github.context.payload as IssueCommentEvent
 
       // handle the case that an issue body was edited, didn't previously match, and now it does...
       const command = testComment(payload.comment.body)
-      if (command === PrettierPleaseCommand.Prettier && !payload.changes) {
+      if (
+        command === PrettierPleaseCommand.Prettier &&
+        payload.action !== 'deleted'
+      ) {
         const githubClient = github.getOctokit(githubToken)
+
         // make sure the issue is a PR, we can't just use the issue from the payload,
         // since this does not distinguish between issues and PRs
-        const issue = await githubClient.issues.get({
+        const issue = await githubClient.rest.issues.get({
           issue_number: github.context.issue.number,
           owner: github.context.repo.owner,
           repo: github.context.repo.repo
         })
         // make sure the Issue is also a Pull Request, and that it's 'open'
-        if (issue.data.pull_request && issue.data.state === 'open') {
+        if (issue.data.pull_request?.url && issue.data.state === 'open') {
           // add a reaction of 👀 to the comment
-          await githubClient.reactions.createForIssueComment({
+          await githubClient.rest.reactions.createForIssueComment({
             comment_id: payload.comment.id,
             content: 'eyes',
             owner: github.context.repo.owner,
             repo: github.context.repo.repo
           })
 
-          const pr = (await githubClient.request(
-            issue.data.pull_request.url
-          )) as OctokitResponse<PullsGetResponseData>
+          const pr = await githubClient.request(issue.data.pull_request.url)
 
           const pr_files = await githubClient.paginate(
-            githubClient.pulls.listFiles,
+            githubClient.rest.pulls.listFiles,
             {
               owner: github.context.repo.owner,
               repo: github.context.repo.repo,
@@ -95,7 +95,7 @@ async function run(): Promise<void> {
             ])
             await exec.exec('git', ['push'])
           } else {
-            await githubClient.issues.createComment({
+            await githubClient.rest.issues.createComment({
               issue_number: github.context.issue.number,
               owner: github.context.repo.owner,
               repo: github.context.repo.repo,
